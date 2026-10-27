@@ -1,0 +1,10 @@
+# 运行产物与个人状态（每台机器不同，不进仓库）
+state.json
+pet.log
+
+# Python
+__pycache__/
+*.py[cod]
+
+# pip 临时目录（历史残留）
+.tmp/
