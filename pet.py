@@ -268,8 +268,9 @@ class PetApp:
 
     def _open_settings(self) -> None:
         if self.settings_win is not None and not self.settings_win.closed:
-            self.say("设置窗口已经开着啦～", 1.8)
+            self.settings_win.show()
             return
+        self.settings_win = None
         try:
             self.settings_win = pet_settings.SettingsWindow(
                 snapshot=self._settings_snapshot,
@@ -989,6 +990,14 @@ class PetApp:
             return
         self._dead = True
         self._save_state()
+        # Let the settings window tear Tk down on its own thread before we go.
+        try:
+            if self.settings_win is not None:
+                self.settings_win.close()
+                self.settings_win.join(1.2)
+                self.settings_win = None
+        except Exception:
+            pass
         self._uninstall_hook()
         try:
             w32.user32.KillTimer(self.pet_hwnd, TIMER_ID)
@@ -1025,6 +1034,14 @@ def main() -> None:
         return
     globals()["APP"] = app
     w32.message_loop()
+    # The settings window owns a Tk interpreter on its own thread; tearing that
+    # down during interpreter exit can abort with Tcl_AsyncDelete, so leave now.
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(0)
 
 
 if __name__ == "__main__":

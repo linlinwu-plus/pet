@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import queue
 import tkinter as tk
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -95,7 +96,9 @@ class SettingsWindow:
         self._on_command = on_command
         self._dpi = max(1.0, min(2.0, dpi_scale))
         self._stop = threading.Event()
+        self._requests = queue.SimpleQueue()
         self.closed = False
+        self.visible = False
         self.root: tk.Tk | None = None
         self._custom_img: Image.Image | None = None
         self._custom_src: Image.Image | None = None
@@ -112,6 +115,17 @@ class SettingsWindow:
 
     def close(self) -> None:
         self._stop.set()
+
+    def show(self) -> None:
+        """Ask the Tk thread to bring the (hidden) window back."""
+        self._requests.put("show")
+
+    def join(self, timeout: float = 1.0) -> None:
+        """Wait for the Tk thread to finish its cleanup."""
+        try:
+            self._thread.join(timeout)
+        except Exception:
+            pass
 
     # --------------------------------------------------------------- thread -
     def _run(self) -> None:
@@ -135,12 +149,51 @@ class SettingsWindow:
             h = min(self.root.winfo_reqheight(), sh - 120)
             self.root.geometry(f"{w}x{h}+{max(20, sw - w - 40)}+80")
             self.root.attributes("-topmost", True)
+            self.visible = True
             self._tick_status()
+            self.root.after(100, self._poll)
             self.root.mainloop()
         except Exception:
             pass
         finally:
+            # Deliberately keep every Tk object alive: Variable.__del__ talks
+            # to Tcl, so letting one be collected off this thread aborts the
+            # process with 'Tcl_AsyncDelete'. The pet exits via os._exit().
             self.closed = True
+
+    def _poll(self) -> None:
+        """Handle show requests and the shutdown flag on the Tk thread."""
+        try:
+            while True:
+                req = self._requests.get_nowait()
+                if req == "show":
+                    self._do_show()
+        except queue.Empty:
+            pass
+        if self._stop.is_set():
+            try:
+                self.root.quit()
+            except Exception:
+                pass
+            return
+        try:
+            self.root.after(100, self._poll)
+        except Exception:
+            pass
+
+    def _do_show(self) -> None:
+        try:
+            self.root.deiconify()
+            self.root.state("normal")
+            self.root.lift()
+            self.root.attributes("-topmost", True)
+            self.visible = True
+        except Exception:
+            pass
+        try:
+            self._load_current()
+        except Exception:
+            pass
 
     def _style(self) -> None:
         style = ttk.Style(self.root)
@@ -414,33 +467,33 @@ class SettingsWindow:
 
     def _tick_status(self) -> None:
         if self._stop.is_set():
-            self._shutdown()
             return
+        delay = 600
+        if self.visible:
+            try:
+                snap = self._snapshot() or {}
+                hunger = int(snap.get("hunger", 0))
+                mood = int(snap.get("mood", 0))
+                self.status.configure(
+                    text=f"饱食度 {hunger}%　心情 {mood}%　"
+                         f"{snap.get('mode_text', '')}")
+            except Exception:
+                pass
+        else:
+            delay = 2000
         try:
-            snap = self._snapshot() or {}
-            hunger = int(snap.get("hunger", 0))
-            mood = int(snap.get("mood", 0))
-            self.status.configure(
-                text=f"饱食度 {hunger}%　心情 {mood}%　"
-                     f"{snap.get('mode_text', '')}")
-        except Exception:
-            pass
-        try:
-            self.root.after(600, self._tick_status)
+            self.root.after(delay, self._tick_status)
         except Exception:
             pass
 
     def _on_close(self) -> None:
-        self._shutdown()
-
-    def _shutdown(self) -> None:
-        if self.root is None:
-            return
+        # Just hide it: destroying Tk objects while the pet keeps running can
+        # abort the process (Tcl_AsyncDelete). The window is reused instead.
         try:
-            self.root.destroy()
+            self.root.withdraw()
         except Exception:
             pass
-        self.closed = True
+        self.visible = False
 
 
 __all__ = ["Settings", "SettingsWindow", "MODEL_CHOICES", "SETTING_KEYS"]
